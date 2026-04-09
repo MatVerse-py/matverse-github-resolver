@@ -64,12 +64,23 @@ class MatVerseResolver:
     def classify_f(x: str) -> str:
         """Fase F: Filtro e Classificação"""
         x = unquote(x).strip()
-        if x.startswith("http"):
-            return "URL"
-        if MatVerseResolver.OWNER_REPO_RE.match(x):
-            return "REPO"
+        
+        # 1. Detecção de Queries Malformadas (Fail-Closed)
+        if "admin:@mee" in x:
+            return "INVALID"
+            
+        # 2. URLs de Busca ou Filtros Administrativos
         if "admin:@me" in x or "repos?q=" in x or "search" in x:
             return "QUERY"
+            
+        # 3. URLs de Repositório
+        if x.startswith("http"):
+            return "URL"
+            
+        # 4. Strings owner/repo
+        if MatVerseResolver.OWNER_REPO_RE.match(x):
+            return "REPO"
+            
         return "INVALID"
 
     @staticmethod
@@ -82,6 +93,8 @@ class MatVerseResolver:
         if input_type == "URL":
             parsed = urlparse(x)
             parts = [p for p in parsed.path.split("/") if p]
+            
+            # Formato: /owner/repo/tree/branch/path
             if len(parts) >= 4 and parts[2] == "tree":
                 return RepoIdentity(
                     owner=parts[0],
@@ -89,6 +102,7 @@ class MatVerseResolver:
                     branch=parts[3],
                     path="/".join(parts[4:]) if len(parts) > 4 else ""
                 )
+            # Formato: /owner/repo
             if len(parts) >= 2:
                 return RepoIdentity(owner=parts[0], repo=parts[1])
         
@@ -103,8 +117,6 @@ class MatVerseResolver:
     @staticmethod
     def omega_gate(psi: float, theta: float = 50.0) -> float:
         """Validação Ω-Gate (Simplificada para Resolução)"""
-        # Ω = 0.4*Ψ + 0.3*Θ^ + ...
-        # Ajustado para permitir PASS (>= 0.85) quando Ψ >= 0.95
         theta_hat = 1 / (1 + theta / 100)
         return 0.7 * psi + 0.3 * theta_hat
 
@@ -119,10 +131,10 @@ def run_pipeline(x: str) -> ResolutionResult:
     if input_type == "INVALID":
         return ResolutionResult(x, input_type, "BLOCK", reason="Entrada malformada ou query inválida (admin:@mee).")
 
-    identity = resolver.select_s(x, input_type)
-    
-    if not identity and input_type == "QUERY":
+    if input_type == "QUERY":
         return ResolutionResult(x, input_type, "WAIT", reason="Query detectada. Requer enumeração administrativa (S) para resolver.")
+
+    identity = resolver.select_s(x, input_type)
     
     if not identity:
         return ResolutionResult(x, input_type, "BLOCK", reason="Falha ao extrair identidade do repositório.")
