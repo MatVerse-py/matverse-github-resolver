@@ -4,10 +4,11 @@ import os
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Optional, List
 import hashlib
-from github_query_resolver import run_pipeline, ResolutionResult
 
-# Assuming metanode.py is in the same directory
-from metanode import MetaNode, MNB, load_ledger, append_ledger, get_last_omega, LEDGER_PATH
+from github_query_resolver import run_pipeline, ResolutionResult
+from metanode import MetaNode, MNB # Keep MetaNode and MNB base classes
+from omega_gate import compute_omega, omega_decision # New Ω-Gate
+from ledger_v2 import load_ledger, append_ledger, LEDGER_PATH # New Ledger V2
 
 @dataclass
 class GitHubResolverMNBData:
@@ -27,37 +28,35 @@ class GitHubResolverNode(MetaNode):
         )
 
     def compute_psi(self, resolved_data: GitHubResolverMNBData) -> float:
-        # PSI é a confiança na resolução. Baseado no omega_score do ResolutionResult.
+        # PSI é a confiança intrínseca na resolução, baseada no omega_score do ResolutionResult.
+        # Usamos o omega_score do resolvedor como PSI para o Ω-Gate externo.
         return resolved_data.resolution_result.get("omega_score", 0.0)
-
-    def validate_omega(self, psi: float, theta: float = 50.0) -> float:
-        # Reutiliza a lógica do omega_gate do github_query_resolver
-        # Para este nó, o psi já é o omega_score da resolução anterior
-        # Então, podemos simplificar ou usar um threshold direto
-        if psi >= 0.85: # Threshold para PASS
-            return psi
-        return 0.0 # Falha no Ω-Gate
 
     def process(self, input_data: str, prev_hash: str = "") -> MNB:
         # 1. Resolve Identidade (usando a lógica do github_query_resolver)
         resolved_data_obj = self.resolve(input_data)
         resolved_data_dict = asdict(resolved_data_obj)
 
-        # 2. Calcula Ψ
+        # Extrai PSI do resultado da resolução
         psi = self.compute_psi(resolved_data_obj)
-
-        # 3. Validação Ω
-        omega_score = self.validate_omega(psi)
         
-        status = resolved_data_obj.resolution_result.get("status", "BLOCK")
-        if status == "BLOCK" or omega_score < 0.85:
-            raise ValueError(f"BLOCK: Ω-Gate falhou no nó {self.name} com score {omega_score} ou status {status}")
+        # Simula valores para theta, cvar, pole (em produção, viriam de sensores/config)
+        theta = 10.0 # Exemplo: baixa incerteza
+        cvar = 0.01  # Exemplo: baixo risco
+        pole = 1     # Exemplo: alinhamento positivo
 
-        # 4. Hash encadeado
+        # 2. Calcula Ω-Gate completo
+        omega_score = compute_omega(psi, theta, cvar, pole)
+        decision = omega_decision(omega_score, psi, cvar)
+        
+        if decision == "BLOCK":
+            raise ValueError(f"BLOCK: Ω-Gate falhou no nó {self.name} com score {omega_score} e decisão {decision}")
+
+        # 3. Hash encadeado
         payload = json.dumps(resolved_data_dict, sort_keys=True)
         current_hash = hashlib.sha256((payload + prev_hash).encode()).hexdigest()
 
-        # 5. Emitir MNB
+        # 4. Emitir MNB
         mnb = MNB(
             data=resolved_data_dict,
             psi=psi,
@@ -65,8 +64,8 @@ class GitHubResolverNode(MetaNode):
             hash=current_hash
         )
         
-        # 6. Ancorar no Ledger
-        append_ledger(mnb, omega_score, status)
+        # 5. Ancorar no Ledger V2 (com Merkle Root e Receipt)
+        append_ledger(mnb.hash, omega_score, decision)
 
         return mnb
 
@@ -99,5 +98,5 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Erro inesperado: {e}")
 
-    print("\n--- Conteúdo do Ledger ---")
+    print("\n--- Conteúdo do Ledger V2 ---")
     print(json.dumps(load_ledger(), indent=2, ensure_ascii=False))
